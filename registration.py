@@ -116,8 +116,7 @@ def show_profile():
         if profile_pic_data:
             # Display profile picture
             image = Image.open(BytesIO(profile_pic_data))
-            rotated_image = image.rotate(90, expand=True)
-            small_image = rotated_image.resize((100, 100))
+            small_image = image.resize((100, 100))
             st.image(small_image, caption="Profile Picture", use_column_width=False)
 
         # Logout button
