@@ -129,7 +129,7 @@ def show_profile():
 
 
 # Main Streamlit app
-st.title("Video to Reel Summarizer")
+st.title("Video-2-Reel-Converter")
 
 # Navigation
 if 'logged_in' not in st.session_state:
