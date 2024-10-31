@@ -3,11 +3,17 @@ __pycache__/
 *.pyc
 .env
 .vscode/
+profiles/
 *.log
 *.mp4
 *.mov
 *.avi
 *.wav
 *.mp3
+*.aac
 *.flac
 *.tmp
+*.png
+*.jpeg
+*.jpg
+*.json

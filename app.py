@@ -220,7 +220,7 @@ else:
             st.success(f"Uploaded file: {uploaded_file.name}")
 
             if st.button("Generate Reel"):
-                with st.spinner('Generating reel...'):
+                with st.spinner('Please wait, This may take few minutes...'):
                     compiled_video_path = generate_reel_from_important_segments(video_path)
                 if os.path.exists(compiled_video_path):
                     st.video(compiled_video_path)
