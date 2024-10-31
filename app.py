@@ -1,13 +1,14 @@
-import streamlit as st
-import auth 
+import streamlit as st 
+import auth
 import whisper
 import ffmpeg
 import openai
 import os
 import json
 import logging
+import tempfile
+import time
 from tqdm import tqdm
-import sys
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,12 +27,26 @@ def extract_audio(video_path, output_audio_path):
 # Transcribing Audio to Text using OpenAI Whisper
 def transcribe_audio(audio_path):
     model = whisper.load_model("base")
-    result = model.transcribe(audio_path)
+    result = model.transcribe(audio_path, fp16=False)
     return result['text'], result['segments']
 
-# Analyzing Text Segments for Importance using OpenAI API
+# Generating a Summary of the Entire Video
+def get_video_summary(transcribed_text):
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant that summarizes the main topics and essence of a given text."},
+            {"role": "user", "content": f"Summarize the following text to capture the main essence: {transcribed_text}"}
+        ],
+        max_tokens=200,
+        temperature=0.5
+    )
+    summary = response['choices'][0]['message']['content'].strip()
+    return summary
+
+# Analyzing Text Segments for Theme and Importance using OpenAI API
 @st.cache_data
-def analyze_text_importance(segments):
+def analyze_text_importance_and_theme(segments, video_summary):
     important_segments = []
     for segment in tqdm(segments, desc="Analyzing segments"):
         text = segment['text']
@@ -40,18 +55,22 @@ def analyze_text_importance(segments):
 
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": f"Please rate the importance of the following text on a scale of 0 to 10: {text}"}],
-            max_tokens=10,
-            temperature=0
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant analyzing text relevance based on a theme."},
+                {"role": "user", "content": f"Based on the theme '{video_summary}', rate the relevance of: {text} on a scale of 0 to 10. Just give the rating in one digit without any words."}
+            ],
+            max_tokens=100,
+            temperature=0.5
         )
-
+        logging.info(f"OpenAI response for segment '{text}': {response}")
+        content = response['choices'][0]['message']['content'].strip()
         try:
-            importance_score = float(response['choices'][0]['message']['content'].strip())
+            importance_score = float(content)
         except (ValueError, IndexError):
             logging.error(f"Unexpected response: {response['choices'][0]['message']['content']}")
             importance_score = 0.0  # Default score if parsing fails
 
-        if importance_score > 1.0:
+        if importance_score > 5.0:  # Select segments with higher relevance
             important_segments.append({
                 'text': text,
                 'start_time': start_time,
@@ -61,54 +80,81 @@ def analyze_text_importance(segments):
     return important_segments
 
 # Save important segments to file
-def save_segments_to_file(segments, filename='important_segments.json'):
+# Save important segments to file with unique timestamped name
+def save_segments_to_file(segments, filename_prefix='important_segments'):
+    timestamp = int(time.time())  # Get current timestamp
+    filename = f"{filename_prefix}_{timestamp}.json"
     with open(filename, 'w') as f:
         json.dump(segments, f, indent=4)
+    logging.info(f"Segments saved to {filename}")
 
 # Extracting Video Segments Based on Timestamps
 def extract_video_segment(video_path, start_time, end_time, output_path):
     duration = end_time - start_time
     ffmpeg.input(video_path, ss=start_time, t=duration).output(output_path).run()
 
-# Compiling Extracted Segments into a 30-Second Reel
-def compile_video_segments(segment_paths, audio_path, output_video_path):
+# Extracting Video and Audio Segments Based on Timestamps
+def extract_video_audio_segment(video_path, start_time, end_time, video_output_path, audio_output_path):
+    duration = end_time - start_time
+    ffmpeg.input(video_path, ss=start_time, t=duration).output(video_output_path, vcodec='libx264').run()
+    ffmpeg.input(video_path, ss=start_time, t=duration).output(audio_output_path, acodec='aac').run()
+
+# Compiling Extracted Segments into a 30-Second Reel with matching audio
+def compile_video_segments_with_audio(segment_video_paths, segment_audio_paths, output_video_path):
     try:
-        # Create input streams for video segments
-        video_inputs = [ffmpeg.input(segment) for segment in segment_paths]
+        # Create FFmpeg input streams for each segment video and audio
+        video_inputs = [ffmpeg.input(video) for video in segment_video_paths]
+        audio_inputs = [ffmpeg.input(audio) for audio in segment_audio_paths]
 
-        # Concatenate video segments using the concat filter
-        video_stream = ffmpeg.concat(*video_inputs, v=1, a=0).node  # Concatenate video, no audio
-        audio_stream = ffmpeg.input(audio_path)
-        output = ffmpeg.output(video_stream[0], audio_stream, output_video_path, c='copy', c_a='aac')
+        # Concatenate video segments with matching audio streams
+        video_concat = ffmpeg.concat(*video_inputs, v=1, a=0)
+        audio_concat = ffmpeg.concat(*audio_inputs, v=0, a=1)
 
-        # Run the FFmpeg command
-        output.run(overwrite_output=True)
+        # Output the final file with concatenated video and audio streams
+        ffmpeg.output(video_concat, audio_concat, output_video_path, vcodec='libx264', acodec='aac').run(overwrite_output=True)
+        logging.info(f"Video compiled successfully to {output_video_path}")
 
     except ffmpeg.Error as e:
         logging.error(f'FFmpeg error: {e.stderr.decode("utf-8") if e.stderr else "Unknown error"}')
         st.error("An error occurred during video processing. Check logs for details.")
 
-# UI for generating reel from important segments
 def generate_reel_from_important_segments(video_path):
-    audio_path = 'output_audio.mp3'
+    timestamp = int(time.time())  # Unique timestamp for each session
+    audio_path = f'output_audio_{timestamp}.mp3'
     extract_audio(video_path, audio_path)
-    _, segments = transcribe_audio(audio_path)
-    important_segments = analyze_text_importance(segments)
+    transcribed_text, segments = transcribe_audio(audio_path)
+
+    video_summary = get_video_summary(transcribed_text)
+    important_segments = analyze_text_importance_and_theme(segments, video_summary)
     important_segments.sort(key=lambda x: x['importance_score'], reverse=True)
-    top_segments = important_segments[:3]  # Automatically take the top 3 segments for the reel
 
-    save_segments_to_file(top_segments, 'important_segments.json')
+    selected_segments = []
+    total_duration = 0
+    for segment in important_segments:
+        segment_duration = segment['end_time'] - segment['start_time']
+        if total_duration + segment_duration <= 35:
+            selected_segments.append(segment)
+            total_duration += segment_duration
+        else:
+            break
 
-    segment_paths = []
-    for i, segment in enumerate(top_segments):
+    save_segments_to_file(selected_segments)
+
+    segment_video_paths = []
+    segment_audio_paths = []
+    for i, segment in enumerate(selected_segments):
         start_time = segment['start_time']
         end_time = segment['end_time']
-        output_path = f'segment_{i + 1}.mp4'
-        extract_video_segment(video_path, start_time, end_time, output_path)
-        segment_paths.append(output_path)
+        video_output_path = f'segment_video_{timestamp}_{i + 1}.mp4'
+        audio_output_path = f'segment_audio_{timestamp}_{i + 1}.aac'
+        extract_video_audio_segment(video_path, start_time, end_time, video_output_path, audio_output_path)
+        segment_video_paths.append(video_output_path)
+        segment_audio_paths.append(audio_output_path)
 
-    compiled_video_path = 'compiled_reel.mp4'
-    compile_video_segments(segment_paths, audio_path, compiled_video_path)
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_file:
+        compiled_video_path = tmp_file.name
+
+    compile_video_segments_with_audio(segment_video_paths, segment_audio_paths, compiled_video_path)
 
     return compiled_video_path
 
@@ -143,13 +189,20 @@ if "username" not in st.session_state:
         occupation = st.text_input("Occupation")
         email = st.text_input("Email")
         phone_number = st.text_input("Phone Number")
+        profile_picture = st.file_uploader("Upload Profile Picture", type=["jpg", "jpeg", "png"])
 
         if st.button("Sign Up"):
-            if all([first_name, last_name, username, password, occupation, email, phone_number]):
-                auth.signup(first_name, last_name, username, password, occupation, email, phone_number)
+            if all([first_name, last_name, username, password, occupation, email, phone_number]) and profile_picture is not None:
+                # Save the uploaded profile picture to a directory
+                profile_picture_path = f"profiles/{profile_picture.name}"  # Specify your upload directory
+                with open(profile_picture_path, "wb") as f:
+                    f.write(profile_picture.getbuffer())
+            
+                auth.signup(first_name, last_name, username, password, occupation, email, phone_number, profile_picture_path)
                 st.success("Signup successful! Please log in.")
             else:
                 st.error("Please fill in all the fields.")
+
 else:
     st.success(f"Welcome, {st.session_state['username']}!")
     
@@ -157,7 +210,6 @@ else:
     nav_option = st.sidebar.radio("Navigation", ("Home", "Profile", "Logout"))
 
     if nav_option == "Home":
-        # Home page for video upload
         st.subheader("Upload a video to generate a reel:")
         uploaded_file = st.file_uploader("Upload a video file", type=["mp4", "mov", "avi"])
 
@@ -170,30 +222,30 @@ else:
             if st.button("Generate Reel"):
                 with st.spinner('Generating reel...'):
                     compiled_video_path = generate_reel_from_important_segments(video_path)
-                st.video(compiled_video_path)
-                st.success("Reel generated successfully!")
-                st.write(f"Download reel: {compiled_video_path}")
+                if os.path.exists(compiled_video_path):
+                    st.video(compiled_video_path)
+                    st.success("Reel generated successfully!")
+                else:
+                    st.error("Reel generation failed: Video file not found.")
 
     elif nav_option == "Profile":
-        # Profile page for user details
         st.subheader("Profile Information")
         user_data = st.session_state['user_data']
+    
+        # Displaying Profile Picture
+        if user_data[8]:  # Assuming profile picture URL is the 9th column
+            st.image(user_data[8], width=150)  # Adjust the width as needed
+        
         st.write(f"**First Name:** {user_data[3]}")
         st.write(f"**Last Name:** {user_data[4]}")
-        st.write(f"**Username:** {st.session_state['username']}")
         st.write(f"**Occupation:** {user_data[5]}")
+        st.write(f"**Username:** {user_data[6]}")
         st.write(f"**Email:** {user_data[1]}")
         st.write(f"**Phone Number:** {user_data[7]}")
 
-        profile_pic = st.file_uploader("Upload Profile Picture", type=["jpg", "jpeg", "png"])
-        if profile_pic is not None:
-            # Save the profile picture (handle storage accordingly)
-            profile_pic_path = f"profile_pics/{st.session_state['username']}.jpg"
-            with open(profile_pic_path, "wb") as f:
-                f.write(profile_pic.getbuffer())
-            st.success("Profile picture updated!")
 
     elif nav_option == "Logout":
-        st.session_state.clear()  # Clear session
-        st.success("Logged out successfully. Redirecting to login page...")
-        st.rerun()  # Reload the app to show login/signup page
+        st.session_state.pop("username", None)
+        st.session_state.pop("user_data", None)
+        st.info("You have been logged out.")
+        st.rerun()

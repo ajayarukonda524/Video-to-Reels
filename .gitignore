@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+*.pyc
+.env
+.vscode/
+*.log
+*.mp4
+*.mov
+*.avi
+*.wav
+*.mp3
+*.flac
+*.tmp
