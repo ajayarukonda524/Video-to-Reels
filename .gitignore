@@ -4,6 +4,7 @@ __pycache__/
 .env
 .vscode/
 profiles/
+fonts/
 *.log
 *.mp4
 *.mov
