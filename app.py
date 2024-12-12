@@ -27,20 +27,17 @@ def download_youtube_video(youtube_url):
     try:
         ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
-            'outtmpl': tempfile.mktemp(suffix='.mp4'),  # Temporary file
-            'noplaylist': True,  # Avoid downloading playlist if URL is a playlist
+            'outtmpl': tempfile.mktemp(suffix='.mp4'),  
+            'noplaylist': True,  
         }
 
-        # Use yt-dlp to download video
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(youtube_url, download=True)
             video_file_path = ydl.prepare_filename(info_dict)
             
-            # Reduce file size after downloading
             reduced_video_path = tempfile.mktemp(suffix='_reduced.mp4')
             ffmpeg.input(video_file_path).output(reduced_video_path, vf='scale=640:360', video_bitrate='500k', vcodec='libx264').run()
 
-            # Check if the file was reduced correctly
             if os.path.getsize(reduced_video_path) > 0:
                 logging.info(f"Downloaded and reduced video file size: {os.path.getsize(reduced_video_path)} bytes.")
                 st.session_state["video_path"] = reduced_video_path
@@ -104,9 +101,8 @@ def analyze_text_importance_and_theme(segments, video_summary):
             importance_score = float(content)
         except (ValueError, IndexError):
             logging.error(f"Unexpected response: {response['choices'][0]['message']['content']}")
-            importance_score = 0.0  # Default score if parsing fails
-
-        if importance_score > 5.0:  # Select segments with higher relevance
+            importance_score = 0.0  
+        if importance_score > 5.0:  
             important_segments.append({
                 'text': text,
                 'start_time': start_time,
@@ -149,7 +145,7 @@ def compile_video_segments_with_audio(segment_video_paths, segment_audio_paths, 
         st.error("An error occurred during video processing. Check logs for details.")
 
 def generate_reels_from_important_segments(video_path):
-    timestamp = int(time.time())  # Unique timestamp for each session
+    timestamp = int(time.time()) 
     audio_path = f'output_audio_{timestamp}.mp3'
     extract_audio(video_path, audio_path)
     transcribed_text, segments = transcribe_audio(audio_path)
@@ -158,23 +154,18 @@ def generate_reels_from_important_segments(video_path):
     important_segments = analyze_text_importance_and_theme(segments, video_summary)
     important_segments.sort(key=lambda x: x['importance_score'], reverse=True)
 
-    # Split important segments into 3 reels of 30 seconds each
     reels = [[] for _ in range(3)]
     durations = [0] * 3
-
     for segment in important_segments:
         segment_duration = segment['end_time'] - segment['start_time']
-        # Add segment to the reel with the least total duration
         for i in range(3):
             if durations[i] + segment_duration <= 30:
                 reels[i].append(segment)
                 durations[i] += segment_duration
                 break
 
-    # Save important segments to file
     save_segments_to_file({"Reel_1": reels[0], "Reel_2": reels[1], "Reel_3": reels[2]})
 
-    # Generate video and audio for each reel
     reel_video_paths = []
     for reel_index, reel in enumerate(reels):
         segment_video_paths = []
@@ -189,7 +180,6 @@ def generate_reels_from_important_segments(video_path):
             segment_video_paths.append(video_output_path)
             segment_audio_paths.append(audio_output_path)
 
-        # Compile each reel
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_file:
             compiled_video_path = tmp_file.name
         compile_video_segments_with_audio(segment_video_paths, segment_audio_paths, compiled_video_path)

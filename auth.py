@@ -40,7 +40,7 @@ def signup(first_name, last_name, username, password, occupation, email, phone_n
     conn = get_db_connection()
     
     if conn is None:
-        return  # Exit if database connection failed
+        return  
 
     try:
         cur = conn.cursor()
@@ -68,15 +68,15 @@ def check_credentials(username, password):
     conn = get_db_connection()
     
     if conn is None:
-        return "Database connection failed."  # Exit if database connection failed
+        return "Database connection failed."  
 
     try:
         cur = conn.cursor()
         cur.execute("SELECT * FROM users WHERE username = %s", (username,))
         user = cur.fetchone()
         cur.close()
-        if user and check_password(password, user[2]):  # Assuming password hash is in the 4th column
-            return user  # user will now include the profile picture URL
+        if user and check_password(password, user[2]):  
+            return user  
         else:
             logging.info("Invalid login attempt.")
             return None
